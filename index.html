@@ -62,16 +62,21 @@
             
             let buffer = new Uint8Array(analyser.frequencyBinCount);
             let receivedText = "";
+            const noiseThreshold = 50;  // Frequency amplitude threshold to filter out noise
             
             function processAudio() {
                 analyser.getByteFrequencyData(buffer);
                 let maxIndex = buffer.indexOf(Math.max(...buffer));
                 let detectedFreq = maxIndex * (sampleRate / analyser.fftSize);
+                let maxAmplitude = buffer[maxIndex];
                 
-                let detectedChar = Object.keys(freqMap).find(key => Math.abs(freqMap[key] - detectedFreq) < freqStep / 2);
-                if (detectedChar) {
-                    receivedText += detectedChar;
-                    document.getElementById("outputText").innerText = receivedText;
+                // Only process frequencies with amplitude above the threshold
+                if (maxAmplitude > noiseThreshold) {
+                    let detectedChar = Object.keys(freqMap).find(key => Math.abs(freqMap[key] - detectedFreq) < freqStep / 2);
+                    if (detectedChar) {
+                        receivedText += detectedChar;
+                        document.getElementById("outputText").innerText = receivedText;
+                    }
                 }
             }
             
