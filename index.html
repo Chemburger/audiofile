@@ -3,120 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Text-to-Audio Encryption</title>
+    <title>Dial-Up FSK Data Transmission</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; position: relative; }
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
         textarea { width: 80%; height: 100px; margin-bottom: 10px; }
         button { padding: 10px; margin: 5px; cursor: pointer; }
-        .version { position: absolute; top: 10px; right: 10px; font-size: 14px; color: gray; }
     </style>
 </head>
 <body>
-    <div class="version">Version 2.43</div>
-    <h1>Text-to-Audio Encryption</h1>
-    <textarea id="textInput" placeholder="Enter text to encrypt"></textarea><br>
-    <button onclick="encryptToAudio()">Encrypt & Play</button>
-    <button onclick="decryptFromAudio()">Start Decoding</button>
-    <h2>Decrypted Text:</h2>
+    <h1>Dial-Up FSK Data Transmission</h1>
+    <textarea id="textInput" placeholder="Enter text to send"></textarea><br>
+    <input type="file" id="fileInput"><br>
+    <button onclick="sendText()">Send Text</button>
+    <button onclick="sendFile()">Send File</button>
+    <button onclick="startReceiving()">Start Receiving</button>
+    <h2>Received Data:</h2>
     <p id="outputText"></p>
+    <a id="downloadLink" style="display: none">Download File</a>
+    
     <script>
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const sampleRate = 44100;
-        const charDuration = 0.1;
-        const noiseThreshold = 100;
         const baseFreq = 1000;
-        const freqStep = 80;
+        const freqStep = 120;
+        const charDuration = 0.1;
         const startEndToneFreq = 400;
         const startEndToneDuration = 0.5;
+        const fileToneFreq = 600;
+        const fileToneDuration = 0.5;
         const pauseDuration = 0.3;
-
-        const charMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+        
+        const charMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
         const freqMap = {};
         charMap.split("").forEach((char, index) => {
             freqMap[char] = baseFreq + index * freqStep;
         });
-
-        function encryptToAudio() {
-            let text = document.getElementById("textInput").value.toUpperCase();
-            let duration = (text.length * charDuration) + (2 * startEndToneDuration) + pauseDuration;
+        
+        function encodeBase64(text) {
+            return btoa(text);
+        }
+        
+        function decodeBase64(encoded) {
+            return atob(encoded);
+        }
+        
+        function generateAudio(data, isFile = false) {
+            let encodedData = encodeBase64(data);
+            let duration = (encodedData.length * charDuration) + (2 * startEndToneDuration) + pauseDuration + (isFile ? fileToneDuration + pauseDuration : 0);
             let buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
             let channelData = buffer.getChannelData(0);
-
+            
             function addTone(startSample, freq, length) {
                 for (let i = 0; i < length * sampleRate; i++) {
                     channelData[startSample + i] = Math.sin(2 * Math.PI * freq * (i / sampleRate));
                 }
             }
-
+            
             let startSample = 0;
             addTone(startSample, startEndToneFreq, startEndToneDuration);
             startSample += (startEndToneDuration + pauseDuration) * sampleRate;
-
-            for (let i = 0; i < text.length; i++) {
-                let char = text[i];
+            
+            if (isFile) {
+                addTone(startSample, fileToneFreq, fileToneDuration);
+                startSample += (fileToneDuration + pauseDuration) * sampleRate;
+            }
+            
+            for (let i = 0; i < encodedData.length; i++) {
+                let char = encodedData[i];
                 let freq = freqMap[char] || baseFreq;
                 addTone(startSample, freq, charDuration);
                 startSample += charDuration * sampleRate;
             }
-
+            
             startSample += pauseDuration * sampleRate;
             addTone(startSample, startEndToneFreq, startEndToneDuration);
-
+            
             let source = audioContext.createBufferSource();
             source.buffer = buffer;
             source.connect(audioContext.destination);
             source.start();
         }
-
-        async function decryptFromAudio() {
+        
+        function sendText() {
+            let text = document.getElementById("textInput").value;
+            generateAudio(text, false);
+        }
+        
+        function sendFile() {
+            let fileInput = document.getElementById("fileInput");
+            let file = fileInput.files[0];
+            if (file) {
+                let reader = new FileReader();
+                reader.onload = function(event) {
+                    let fileData = event.target.result;
+                    generateAudio(fileData, true);
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+        
+        async function startReceiving() {
             let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             let analyser = audioContext.createAnalyser();
             let microphone = audioContext.createMediaStreamSource(stream);
             microphone.connect(analyser);
             analyser.fftSize = 4096;
-
+            
             let buffer = new Float32Array(analyser.fftSize);
-            let receivedText = "";
+            let receivedData = "";
             let inTransmission = false;
-
-            function goertzelFilter(frequency, samples) {
-                let s1 = 0, s2 = 0;
-                const coeff = 2 * Math.cos(2 * Math.PI * frequency / sampleRate);
+            let isFile = false;
+            
+            function detectTone(frequency, samples) {
+                let power = 0;
                 for (let sample of samples) {
-                    let s0 = sample + coeff * s1 - s2;
-                    s2 = s1;
-                    s1 = s0;
+                    power += Math.sin(2 * Math.PI * frequency * (sample / sampleRate));
                 }
-                return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+                return power;
             }
-
+            
             function processAudio() {
                 analyser.getFloatTimeDomainData(buffer);
-                let maxDetected = { char: null, power: 0 };
-
-                for (let [char, freq] of Object.entries(freqMap)) {
-                    let power = goertzelFilter(freq, buffer);
-                    if (power > noiseThreshold && power > maxDetected.power) {
-                        maxDetected = { char, power };
-                    }
-                }
-
-                let startTonePower = goertzelFilter(startEndToneFreq, buffer);
-                if (startTonePower > noiseThreshold) {
+                
+                let startTonePower = detectTone(startEndToneFreq, buffer);
+                let fileTonePower = detectTone(fileToneFreq, buffer);
+                
+                if (startTonePower > 0.5) {
                     if (!inTransmission) {
                         inTransmission = true;
-                        receivedText = "";
+                        receivedData = "";
+                        isFile = false;
                     } else {
                         inTransmission = false;
-                        document.getElementById("outputText").innerText = receivedText;
+                        let decodedData = decodeBase64(receivedData);
+                        if (isFile) {
+                            let link = document.getElementById("downloadLink");
+                            link.href = decodedData;
+                            link.download = "received_file";
+                            link.style.display = "block";
+                            link.innerText = "Download Received File";
+                        } else {
+                            document.getElementById("outputText").innerText = decodedData;
+                        }
                     }
                 }
-
-                if (inTransmission && maxDetected.char) {
-                    receivedText += maxDetected.char;
+                
+                if (fileTonePower > 0.5) {
+                    isFile = true;
+                }
+                
+                for (let [char, freq] of Object.entries(freqMap)) {
+                    let power = detectTone(freq, buffer);
+                    if (power > 0.5) {
+                        receivedData += char;
+                    }
                 }
             }
-
+            
             setInterval(processAudio, charDuration * 1000);
         }
     </script>
