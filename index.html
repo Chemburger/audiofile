@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text-to-Audio Encryption</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        textarea { width: 80%; height: 100px; margin-bottom: 10px; }
+        button { padding: 10px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Text-to-Audio Encryption</h1>
+    <textarea id="textInput" placeholder="Enter text to encrypt"></textarea><br>
+    <button onclick="encryptToAudio()">Encrypt & Play</button>
+    <button onclick="decryptFromAudio()">Start Decoding</button>
+    <h2>Decrypted Text:</h2>
+    <p id="outputText"></p>
+
+    <script>
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const sampleRate = 44100;
+        const baseFreq = 400; 
+        const freqStep = 30; 
+        const charDuration = 0.1; 
+
+        const charMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+        const freqMap = {};
+        charMap.split("").forEach((char, index) => {
+            freqMap[char] = baseFreq + index * freqStep;
+        });
+
+        function encryptToAudio() {
+            let text = document.getElementById("textInput").value.toUpperCase();
+            let duration = text.length * charDuration;
+            let buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
+            let channelData = buffer.getChannelData(0);
+            
+            for (let i = 0; i < text.length; i++) {
+                let char = text[i];
+                let freq = freqMap[char] || baseFreq;
+                let startSample = i * charDuration * sampleRate;
+                
+                for (let j = 0; j < charDuration * sampleRate; j++) {
+                    channelData[startSample + j] = Math.sin(2 * Math.PI * freq * (j / sampleRate));
+                }
+            }
+            
+            let source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.start();
+        }
+
+        async function decryptFromAudio() {
+            let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            let analyser = audioContext.createAnalyser();
+            let microphone = audioContext.createMediaStreamSource(stream);
+            microphone.connect(analyser);
+            analyser.fftSize = 2048;
+            
+            let buffer = new Uint8Array(analyser.frequencyBinCount);
+            let receivedText = "";
+            
+            function processAudio() {
+                analyser.getByteFrequencyData(buffer);
+                let maxIndex = buffer.indexOf(Math.max(...buffer));
+                let detectedFreq = maxIndex * (sampleRate / analyser.fftSize);
+                
+                let detectedChar = Object.keys(freqMap).find(key => Math.abs(freqMap[key] - detectedFreq) < freqStep / 2);
+                if (detectedChar) {
+                    receivedText += detectedChar;
+                    document.getElementById("outputText").innerText = receivedText;
+                }
+            }
+            
+            setInterval(processAudio, charDuration * 1000);
+        }
+    </script>
+</body>
+</html>
