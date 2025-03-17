@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Text-to-Audio Encryption</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; position: relative; }
         textarea { width: 80%; height: 100px; margin-bottom: 10px; }
         button { padding: 10px; margin: 5px; cursor: pointer; }
+        .version { position: absolute; top: 10px; right: 10px; font-size: 14px; color: gray; }
     </style>
 </head>
 <body>
+    <div class="version">Version 2.43</div>
     <h1>Text-to-Audio Encryption</h1>
     <textarea id="textInput" placeholder="Enter text to encrypt"></textarea><br>
     <button onclick="encryptToAudio()">Encrypt & Play</button>
@@ -24,10 +26,9 @@
         const noiseThreshold = 100;
         const baseFreq = 1000;
         const freqStep = 80;
-        const handshakeTones = [600, 800, 1200, 1000, 1400, 1600];
-        const startEndToneFreq = 2100;
-        const startEndToneDuration = 1;
-        const pauseDuration = 0.5;
+        const startEndToneFreq = 400;
+        const startEndToneDuration = 0.5;
+        const pauseDuration = 0.3;
 
         const charMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
         const freqMap = {};
@@ -37,7 +38,7 @@
 
         function encryptToAudio() {
             let text = document.getElementById("textInput").value.toUpperCase();
-            let duration = (text.length * charDuration) + (2 * startEndToneDuration) + (handshakeTones.length * 0.2) + pauseDuration;
+            let duration = (text.length * charDuration) + (2 * startEndToneDuration) + pauseDuration;
             let buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
             let channelData = buffer.getChannelData(0);
 
@@ -48,11 +49,6 @@
             }
 
             let startSample = 0;
-            handshakeTones.forEach(freq => {
-                addTone(startSample, freq, 0.2);
-                startSample += 0.2 * sampleRate;
-            });
-
             addTone(startSample, startEndToneFreq, startEndToneDuration);
             startSample += (startEndToneDuration + pauseDuration) * sampleRate;
 
