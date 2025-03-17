@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Text to audio v1.3</title>
+    <title>Text-to-Audio Encryption</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
         textarea { width: 80%; height: 100px; margin-bottom: 10px; }
@@ -12,7 +12,7 @@
 </head>
 <body>
     <h1>Text-to-Audio Encryption</h1>
-    <textarea id="textInput" placeholder="Enter text to audio"></textarea><br>
+    <textarea id="textInput" placeholder="Enter text to encrypt"></textarea><br>
     <button onclick="encryptToAudio()">Encrypt & Play</button>
     <button onclick="decryptFromAudio()">Start Decoding</button>
     <h2>Decrypted Text:</h2>
@@ -20,10 +20,14 @@
     <script>
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const sampleRate = 44100;
-        const charDuration = 0.15;
-        const noiseThreshold = 80;
-        const baseFreq = 500;
-        const freqStep = 75;
+        const charDuration = 0.1;
+        const noiseThreshold = 100;
+        const baseFreq = 1000;
+        const freqStep = 80;
+        const handshakeTones = [600, 800, 1200, 1000, 1400, 1600];
+        const startEndToneFreq = 2100;
+        const startEndToneDuration = 1;
+        const pauseDuration = 0.5;
 
         const charMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
         const freqMap = {};
@@ -33,19 +37,34 @@
 
         function encryptToAudio() {
             let text = document.getElementById("textInput").value.toUpperCase();
-            let duration = text.length * charDuration;
+            let duration = (text.length * charDuration) + (2 * startEndToneDuration) + (handshakeTones.length * 0.2) + pauseDuration;
             let buffer = audioContext.createBuffer(1, duration * sampleRate, sampleRate);
             let channelData = buffer.getChannelData(0);
+
+            function addTone(startSample, freq, length) {
+                for (let i = 0; i < length * sampleRate; i++) {
+                    channelData[startSample + i] = Math.sin(2 * Math.PI * freq * (i / sampleRate));
+                }
+            }
+
+            let startSample = 0;
+            handshakeTones.forEach(freq => {
+                addTone(startSample, freq, 0.2);
+                startSample += 0.2 * sampleRate;
+            });
+
+            addTone(startSample, startEndToneFreq, startEndToneDuration);
+            startSample += (startEndToneDuration + pauseDuration) * sampleRate;
 
             for (let i = 0; i < text.length; i++) {
                 let char = text[i];
                 let freq = freqMap[char] || baseFreq;
-                let startSample = i * charDuration * sampleRate;
-
-                for (let j = 0; j < charDuration * sampleRate; j++) {
-                    channelData[startSample + j] = Math.sin(2 * Math.PI * freq * (j / sampleRate));
-                }
+                addTone(startSample, freq, charDuration);
+                startSample += charDuration * sampleRate;
             }
+
+            startSample += pauseDuration * sampleRate;
+            addTone(startSample, startEndToneFreq, startEndToneDuration);
 
             let source = audioContext.createBufferSource();
             source.buffer = buffer;
@@ -60,21 +79,45 @@
             microphone.connect(analyser);
             analyser.fftSize = 4096;
 
-            let buffer = new Uint8Array(analyser.frequencyBinCount);
+            let buffer = new Float32Array(analyser.fftSize);
             let receivedText = "";
+            let inTransmission = false;
+
+            function goertzelFilter(frequency, samples) {
+                let s1 = 0, s2 = 0;
+                const coeff = 2 * Math.cos(2 * Math.PI * frequency / sampleRate);
+                for (let sample of samples) {
+                    let s0 = sample + coeff * s1 - s2;
+                    s2 = s1;
+                    s1 = s0;
+                }
+                return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+            }
 
             function processAudio() {
-                analyser.getByteFrequencyData(buffer);
-                let maxIndex = buffer.indexOf(Math.max(...buffer));
-                let detectedFreq = maxIndex * (sampleRate / analyser.fftSize);
-                let maxAmplitude = buffer[maxIndex];
+                analyser.getFloatTimeDomainData(buffer);
+                let maxDetected = { char: null, power: 0 };
 
-                if (maxAmplitude > noiseThreshold) {
-                    let detectedChar = Object.keys(freqMap).find(key => Math.abs(freqMap[key] - detectedFreq) < freqStep / 2);
-                    if (detectedChar) {
-                        receivedText += detectedChar;
+                for (let [char, freq] of Object.entries(freqMap)) {
+                    let power = goertzelFilter(freq, buffer);
+                    if (power > noiseThreshold && power > maxDetected.power) {
+                        maxDetected = { char, power };
+                    }
+                }
+
+                let startTonePower = goertzelFilter(startEndToneFreq, buffer);
+                if (startTonePower > noiseThreshold) {
+                    if (!inTransmission) {
+                        inTransmission = true;
+                        receivedText = "";
+                    } else {
+                        inTransmission = false;
                         document.getElementById("outputText").innerText = receivedText;
                     }
+                }
+
+                if (inTransmission && maxDetected.char) {
+                    receivedText += maxDetected.char;
                 }
             }
 
